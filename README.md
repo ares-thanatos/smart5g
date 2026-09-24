@@ -200,8 +200,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ### Build from Command Line
 ```powershell
 # Clone the repository
-git clone https://github.com/sathya007/smart5g.git
-cd smart5g
+git clone https://github.com/sathya007/smart_5g.git
+cd smart_5g
 
 # Build Debug APK
 .\gradlew assembleDebug
