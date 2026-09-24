@@ -5,8 +5,11 @@
 [![Compose](https://img.shields.io/badge/UI-Jetpack%20Compose%20%2F%20Material%203-4285F4.svg?style=flat&logo=jetpackcompose)](https://developer.android.com/jetpack/compose)
 [![MinSdk](https://img.shields.io/badge/Min%20SDK-26%20(Android%208.0)-brightgreen.svg)](https://developer.android.com)
 [![TargetSdk](https://img.shields.io/badge/Target%20SDK-34%20(Android%2014)-blue.svg)](https://developer.android.com)
+[![Latest Release](https://img.shields.io/github/v/release/ares-thanatos/smart5g?color=blue&label=Latest%20Release)](https://github.com/ares-thanatos/smart5g/releases)
+[![Download APK](https://img.shields.io/badge/Download-Smart5G.apk-success.svg?logo=android)](https://github.com/ares-thanatos/smart5g/releases/latest)
 
 **Smart5G** is a modern Android application designed for real-time cellular telemetry diagnostics, multi-stream speed benchmarking, and room-by-room indoor signal mapping. It helps users discover cellular dead zones, evaluate real-world 5G/4G connectivity, and identify optimal placement for 5G Home Broadband (Fixed Wireless Access / CPE) routers and remote work desks.
+
 
 ---
 
