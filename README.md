@@ -136,7 +136,41 @@ $$\text{Quality Score} = \frac{0.30 \cdot S_{\text{Down}} + 0.15 \cdot S_{\text{
 - **HTTP Engine**: `java.net.HttpURLConnection` with multi-stream coroutine dispatchers
 - **Build System**: Gradle 8.7 with Android Gradle Plugin 8.5.2
 
+### Architecture Overview
+
+```text
+Android Device
+      │
+      ▼
+Android Telephony & Network APIs
+      │
+      ▼
+Cellular Measurement Layer
+      │
+      ├── Signal Strength (RSRP, RSRQ, SINR)
+      ├── Tower Identifiers (PCI, CI, TAC, ARFCN)
+      └── Network Technology (5G SA, 5G NSA, 4G LTE)
+      │
+      ▼
+Network Performance Benchmark Engine
+      │
+      ├── Latency & Jitter
+      ├── Multi-Threaded Download
+      └── Parallel Upload
+      │
+      ▼
+Smart5G Quality & Recommendation Engine
+      │
+      ▼
+Presentation Layer (Jetpack Compose M3)
+      │
+      ├── Live Dashboard & Radial Speedometer
+      ├── Room Coverage Survey & Heatmapping
+      └── Diagnostic Tower Telemetry Table
+```
+
 ---
+
 
 ## 📱 Device Compatibility & Permissions
 
