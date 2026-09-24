@@ -106,16 +106,29 @@ Smart5G directly reads raw hardware values from Android telephony baseband APIs:
 
 ## 📊 Smart5G Quality Score Algorithm
 
-The **Smart5G Quality Score** is an empirical 0–100 rating that balances real-world throughput, latency, jitter, and radio signal strength:
+## 📊 Smart5G Quality Score Algorithm (ScoreEngine)
 
-$$\text{Quality Score} = \frac{0.30 \cdot S_{\text{Down}} + 0.15 \cdot S_{\text{Up}} + 0.20 \cdot S_{\text{Lat}} + 0.10 \cdot S_{\text{Jit}} + 0.25 \cdot S_{\text{RSRP}}}{\sum \text{Weights of Available Metrics}}$$
+The **Smart5G Quality Score** is an empirical 0–100 telecom rating powered by `com.smart5g.core.ScoreEngine`. When metrics are unmeasured (e.g. before a speed test is run), missing components are dynamically dropped and available weights re-normalized over what was measured:
 
-### Metric Normalization Curves
-- **Download ($S_{\text{Down}}$)**: Evaluated up to 100 Mbps (100 Mbps = 100).
-- **Upload ($S_{\text{Up}}$)**: Evaluated up to 50 Mbps (50 Mbps = 100).
-- **Latency ($S_{\text{Lat}}$)**: $100 - (\text{latency\_ms} / 1.5)$ (≤ 20 ms = 100; 150 ms = 0).
-- **Jitter ($S_{\text{Jit}}$)**: $100 - (\text{jitter\_ms} \times 4)$ (≤ 3 ms = 100; 25 ms = 0).
-- **RSRP Signal ($S_{\text{RSRP}}$)**: $(\text{RSRP} + 120) \times 2.0$ (≥ -70 dBm = 100; ≤ -120 dBm = 0).
+$$\text{Quality Score} = \frac{\sum (W_i \cdot S_i)}{\sum W_i} \quad \text{where } W_i \in \{\text{Radio}: 30, \text{Speed}: 30, \text{Latency}: 15, \text{Stability}: 15, \text{Upload}: 10\}$$
+
+### Component Normalization Curves
+- **Radio Quality (30% weight)**: Tri-metric blended RF score:
+  - RSRP: Linear between -125 dBm (0 pts) and -80 dBm (100 pts) [40% RF weight]
+  - RSRQ: Linear between -20 dB (0 pts) and -10 dB (100 pts) [20% RF weight]
+  - SINR: Linear between -5 dB (0 pts) and +20 dB (100 pts) [40% RF weight]
+- **Download Speed (30% weight)**: Logarithmic curve $\frac{\ln(1 + \text{Mbps})}{\ln(1 + 300)} \times 100$ so gains in lower bandwidths (e.g. 20 $\rightarrow$ 100 Mbps) matter more than high-end fluctuations.
+- **Latency (15% weight)**: Linear between 150 ms (0 pts) and 20 ms (100 pts).
+- **Stability Variance (15% weight)**: Standard deviation over $\ge 5$ radio samples ($\sigma_{\text{RSRP}}$ 0 dB $\rightarrow$ 100 pts, 8 dB $\rightarrow$ 0 pts; $\sigma_{\text{SINR}}$ 0 dB $\rightarrow$ 100 pts, 10 dB $\rightarrow$ 0 pts).
+- **Upload Speed (10% weight)**: Logarithmic curve $\frac{\ln(1 + \text{Mbps})}{\ln(1 + 50)} \times 100$.
+
+### Diagnostic Confidence & Fingerprint
+- **Confidence Rating**:
+  - `HIGH`: $\ge 80\%$ component coverage AND a live speed benchmark has been executed.
+  - `MEDIUM`: Moderate sample count ($\ge 5$) or radio coverage without full throughput benchmarking.
+  - `LOW`: Single-sample or sparse telemetry.
+- **Fingerprint**: High-level classification combining overall performance and RF stability (e.g. `EXCELLENT / STABLE`, `GOOD / UNSTABLE`).
+- **Connection Shift Detection**: Automated real-time alerts when handovers or fading cause significant quality shifts ($|\Delta| \ge 15$ pts).
 
 ### Use-Case Readiness Thresholds
 - 🎮 **Online Gaming**: Requires Latency ≤ 45 ms and Jitter ≤ 10 ms.

@@ -23,7 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.CompareArrows
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.smart5g.core.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,8 +59,10 @@ class VM(app: Application) : AndroidViewModel(app) {
 
     val signal = MutableStateFlow<Signal?>(null)
     val signalHistory = MutableStateFlow<List<Int>>(emptyList())
+    val radioSamples = MutableStateFlow<List<RadioSample>>(emptyList())
     val perf = MutableStateFlow<Perf?>(null)
     val score = MutableStateFlow<Score?>(null)
+    val changeAlert = MutableStateFlow<ChangeAlert?>(null)
     val speedProgress = MutableStateFlow(SpeedTestProgress())
     val running = MutableStateFlow(false)
     val statusText = MutableStateFlow("")
@@ -68,6 +71,10 @@ class VM(app: Application) : AndroidViewModel(app) {
     val speedConfig = MutableStateFlow(repo.loadSpeedConfig())
 
     private var monitorJob: Job? = null
+
+    fun dismissChangeAlert() {
+        changeAlert.value = null
+    }
 
     fun startMonitor() {
         if (monitorJob != null || !mon.hasPerms()) return
@@ -79,9 +86,18 @@ class VM(app: Application) : AndroidViewModel(app) {
                     val current = signalHistory.value
                     signalHistory.value = (current + r).takeLast(30)
                 }
-                perf.value?.let { p ->
-                    score.value = Quality.score(s, p)
+                val sample = RadioSample(rsrp = s.rsrp, rsrq = s.rsrq, sinr = s.sinr)
+                val curSamples = (radioSamples.value + sample).takeLast(30)
+                radioSamples.value = curSamples
+
+                val prev = score.value?.coreResult
+                val newScore = Quality.score(curSamples, perf.value)
+                if (prev != null && newScore?.coreResult != null) {
+                    ChangeDetector.detect(prev, newScore.coreResult)?.let { alert ->
+                        changeAlert.value = alert
+                    }
                 }
+                score.value = newScore
             }
         }
     }
@@ -112,7 +128,14 @@ class VM(app: Application) : AndroidViewModel(app) {
                     speedProgress.value = prog
                 }
                 perf.value = p
-                score.value = Quality.score(signal.value, p)
+                val prev = score.value?.coreResult
+                val newScore = Quality.score(radioSamples.value, p)
+                if (prev != null && newScore?.coreResult != null) {
+                    ChangeDetector.detect(prev, newScore.coreResult)?.let { alert ->
+                        changeAlert.value = alert
+                    }
+                }
+                score.value = newScore
             } finally {
                 running.value = false
                 statusText.value = ""
@@ -129,16 +152,18 @@ class VM(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val rs = mutableListOf<Int>()
+                val collected = mutableListOf<RadioSample>()
                 var lastSig: Signal? = null
 
                 if (mon.hasPerms()) {
-                    for (i in 1..4) {
-                        statusText.value = "Sampling cellular signal ($i/4)..."
+                    for (i in 1..5) {
+                        statusText.value = "Sampling cellular radio ($i/5)..."
                         val s = mon.read()
                         lastSig = s
                         signal.value = s
                         s.rsrp?.let { rs.add(it) }
-                        delay(1200)
+                        collected.add(RadioSample(rsrp = s.rsrp, rsrq = s.rsrq, sinr = s.sinr))
+                        delay(1000)
                     }
                 }
 
@@ -152,12 +177,14 @@ class VM(app: Application) : AndroidViewModel(app) {
 
                 val med = rs.sorted().getOrNull(rs.size / 2)
                 val spread = if (rs.size >= 2) rs.max() - rs.min() else null
-                val sc = Quality.score(lastSig, p, med, spread)
+                val sc = Quality.score(collected, p, spread)
 
                 val newRoom = RoomResult(
                     name = roomLabel,
                     score = sc?.total,
                     grade = sc?.grade,
+                    confidence = sc?.confidence?.name,
+                    fingerprint = sc?.fingerprint,
                     rsrp = med,
                     spread = spread,
                     perf = p,
@@ -263,7 +290,7 @@ fun App(vm: VM, isDark: Boolean, onToggleDark: () -> Unit) {
                             shape = RoundedCornerShape(4.dp),
                             color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
                         ) {
-                            Text("v1.1.0", fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text("v1.2.0", fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
                     }
                 },
@@ -419,11 +446,16 @@ fun DashboardScreen(vm: VM, isDark: Boolean) {
     val signal by vm.signal.collectAsState()
     val perf by vm.perf.collectAsState()
     val score by vm.score.collectAsState()
+    val changeAlert by vm.changeAlert.collectAsState()
     val progress by vm.speedProgress.collectAsState()
     val isRunning by vm.running.collectAsState()
     val statusText by vm.statusText.collectAsState()
     val history by vm.signalHistory.collectAsState()
     val speedConfig by vm.speedConfig.collectAsState()
+
+    changeAlert?.let { alert ->
+        ChangeAlertBanner(alert = alert, isDark = isDark, onDismiss = { vm.dismissChangeAlert() })
+    }
 
     SignalMeterCard(signal, isDark)
 
@@ -444,6 +476,57 @@ fun DashboardScreen(vm: VM, isDark: Boolean) {
 
     score?.let { sc ->
         QualityScoreCard(sc, isDark)
+    }
+}
+
+@Composable
+fun ChangeAlertBanner(alert: ChangeAlert, isDark: Boolean, onDismiss: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (alert.improved) {
+                if (isDark) Color(0xFF1B3E25) else Color(0xFFE8F5E9)
+            } else {
+                if (isDark) Color(0xFF3E2723) else Color(0xFFFFF3E0)
+            }
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (alert.improved) Icons.AutoMirrored.Filled.TrendingUp else Icons.AutoMirrored.Filled.TrendingDown,
+                    contentDescription = null,
+                    tint = if (alert.improved) Color(0xFF4CAF50) else Color(0xFFFF9800),
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text(
+                        if (alert.improved) "Network Shift: Score Rose to ${alert.to}" else "Network Shift: Score Dropped to ${alert.to}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = if (alert.improved) {
+                            if (isDark) Color(0xFF81C784) else Color(0xFF1B5E20)
+                        } else {
+                            if (isDark) Color(0xFFFFB74D) else Color(0xFFBF360C)
+                        }
+                    )
+                    Text(
+                        alert.reason,
+                        fontSize = 12.sp,
+                        color = if (isDark) Color(0xFFCBD5E1) else Color(0xFF455A64)
+                    )
+                }
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Color.Gray, modifier = Modifier.size(16.dp))
+            }
+        }
     }
 }
 
@@ -1011,8 +1094,35 @@ fun QualityScoreCard(score: Score, isDark: Boolean) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("Smart5G Quality Score", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(score.grade, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Smart5G Quality Score", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = when (score.confidence) {
+                                Confidence.HIGH -> if (isDark) Color(0xFF1B5E20) else Color(0xFFE8F5E9)
+                                Confidence.MEDIUM -> if (isDark) Color(0xFF004D40) else Color(0xFFE0F2F1)
+                                Confidence.LOW -> if (isDark) Color(0xFF424242) else Color(0xFFEEEEEE)
+                            }
+                        ) {
+                            Text(
+                                text = "${score.confidence.name} CONFIDENCE",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = when (score.confidence) {
+                                    Confidence.HIGH -> Color(0xFF4CAF50)
+                                    Confidence.MEDIUM -> Color(0xFF00897B)
+                                    Confidence.LOW -> Color.Gray
+                                },
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    if (score.fingerprint.isNotBlank()) {
+                        Text(score.fingerprint, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    } else {
+                        Text(score.grade, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    }
                 }
                 Surface(
                     shape = CircleShape,
@@ -1045,6 +1155,40 @@ fun QualityScoreCard(score: Score, isDark: Boolean) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(name, fontSize = 10.sp, color = Color.Gray)
                         Text("$partScore", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        score.rawParts[name]?.let { raw ->
+                            Text(raw.substringBefore(",").take(14), fontSize = 9.sp, color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B), maxLines = 1)
+                        }
+                    }
+                }
+            }
+
+            if (score.why.isNotEmpty() || score.reducing.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                HorizontalDivider(color = if (isDark) Color(0xFF263242) else Color(0xFFEEEEEE))
+                Spacer(Modifier.height(10.dp))
+
+                if (score.why.isNotEmpty()) {
+                    Text("Strengths", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = if (isDark) Color(0xFF81C784) else Color(0xFF2E7D32))
+                    Spacer(Modifier.height(4.dp))
+                    score.why.forEach { strength ->
+                        Row(modifier = Modifier.padding(vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF4CAF50), modifier = Modifier.size(12.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(strength, fontSize = 11.sp, color = if (isDark) Color(0xFFCBD5E1) else Color(0xFF37474F))
+                        }
+                    }
+                }
+
+                if (score.reducing.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("Bottlenecks Lowering Score", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = if (isDark) Color(0xFFFFB74D) else Color(0xFFE65100))
+                    Spacer(Modifier.height(4.dp))
+                    score.reducing.forEach { bottleneck ->
+                        Row(modifier = Modifier.padding(vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFF9800), modifier = Modifier.size(12.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(bottleneck, fontSize = 11.sp, color = if (isDark) Color(0xFFCBD5E1) else Color(0xFF37474F))
+                        }
                     }
                 }
             }
@@ -1191,7 +1335,31 @@ fun RoomSurveyScreen(vm: VM, isDark: Boolean) {
             }
         }
 
-        val best = rooms.maxByOrNull { it.score ?: -1 }
+        val spots = rooms.mapNotNull { r ->
+            val sc = r.score ?: return@mapNotNull null
+            val conf = when (r.confidence?.uppercase()) {
+                "HIGH" -> Confidence.HIGH
+                "MEDIUM" -> Confidence.MEDIUM
+                else -> Confidence.LOW
+            }
+            val res = ScoreResult(
+                score = sc,
+                label = ScoreEngine.label(sc.toDouble()),
+                confidence = conf,
+                parts = emptyMap(),
+                availableWeight = 100.0,
+                why = emptyList(),
+                reducing = emptyList(),
+                fingerprint = r.fingerprint ?: ""
+            )
+            Spot(name = r.name, result = res, downMbps = r.perf.down, latencyMs = r.perf.latMs)
+        }
+
+        val bestSpot = BestSpot.pick(spots)
+        val lowestSpot = spots.minByOrNull { it.result.score }
+        val recommendation = if (lowestSpot != null && spots.size > 1) BestSpot.recommend(lowestSpot, spots, minGain = 4) else null
+        val best = rooms.find { it.name == bestSpot?.name } ?: rooms.maxByOrNull { it.score ?: -1 }
+
         if (best != null && rooms.size > 1) {
             Card(
                 colors = CardDefaults.cardColors(
@@ -1208,13 +1376,17 @@ fun RoomSurveyScreen(vm: VM, isDark: Boolean) {
                     Spacer(Modifier.width(10.dp))
                     Column {
                         Text(
-                            "Recommended 5G CPE / Router Spot: ${best.name}",
+                            "⭐ Best Measured Spot: ${best.name} (${best.score ?: 0}/100)",
                             fontWeight = FontWeight.Bold,
                             color = if (isDark) Color(0xFF81C784) else Color(0xFF2E7D32),
                             fontSize = 14.sp
                         )
                         Text(
-                            "Achieved ${best.score ?: 0}/100 quality score with ${best.perf.down?.let { "%.1f Mbps".format(it) } ?: "highest"} download speed.",
+                            if (recommendation != null && recommendation.qualityGain > 0) {
+                                "+${recommendation.qualityGain} quality gain over ${lowestSpot?.name ?: "other spots"}${recommendation.downloadGainMbps?.let { " (+%.1f Mbps faster)".format(it) } ?: ""}. Ideal for 5G Gateway/Router."
+                            } else {
+                                "Highest scored room with ${best.perf.down?.let { "%.1f Mbps".format(it) } ?: "peak"} download speed. Recommended for 5G Gateway placement."
+                            },
                             fontSize = 12.sp,
                             color = if (isDark) Color(0xFFA5D6A7) else Color(0xFF1B5E20)
                         )
@@ -1255,7 +1427,26 @@ fun RoomSurveyScreen(vm: VM, isDark: Boolean) {
                                         Text("⭐ BEST", fontSize = 11.sp, color = Color(0xFF4CAF50), fontWeight = FontWeight.ExtraBold)
                                     }
                                 }
-                                Text(r.formattedDate, fontSize = 11.sp, color = Color.Gray)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    r.fingerprint?.takeIf { it.isNotBlank() }?.let { fp ->
+                                        Text(fp, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                                        Spacer(Modifier.width(6.dp))
+                                    }
+                                    r.confidence?.let { conf ->
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = if (conf == "HIGH") {
+                                                if (isDark) Color(0xFF1B5E20) else Color(0xFFE8F5E9)
+                                            } else {
+                                                if (isDark) Color(0xFF004D40) else Color(0xFFE0F2F1)
+                                            }
+                                        ) {
+                                            Text(conf, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), color = if (conf == "HIGH") Color(0xFF4CAF50) else Color(0xFF00897B))
+                                        }
+                                        Spacer(Modifier.width(6.dp))
+                                    }
+                                    Text(r.formattedDate, fontSize = 11.sp, color = Color.Gray)
+                                }
                             }
                         }
 

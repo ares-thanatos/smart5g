@@ -6,7 +6,7 @@ plugins {
 android {
     namespace = "com.smart5g"
     compileSdk = 34
-    defaultConfig { applicationId = "com.smart5g"; minSdk = 26; targetSdk = 34; versionCode = 2; versionName = "1.1.0" }
+    defaultConfig { applicationId = "com.smart5g"; minSdk = 26; targetSdk = 34; versionCode = 3; versionName = "1.2.0" }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }

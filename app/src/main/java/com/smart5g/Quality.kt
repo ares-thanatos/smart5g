@@ -1,4 +1,11 @@
-﻿package com.smart5g
+package com.smart5g
+
+import com.smart5g.core.Confidence
+import com.smart5g.core.InternetResult
+import com.smart5g.core.RadioSample
+import com.smart5g.core.ScoreEngine
+import com.smart5g.core.ScoreInput
+import com.smart5g.core.ScoreResult
 
 data class UseCaseGrade(
     val name: String,
@@ -12,36 +19,43 @@ data class Score(
     val grade: String,
     val summary: String,
     val parts: Map<String, Int>,
+    val rawParts: Map<String, String> = emptyMap(),
+    val confidence: Confidence = Confidence.LOW,
+    val fingerprint: String = "",
+    val why: List<String> = emptyList(),
+    val reducing: List<String> = emptyList(),
     val useCases: List<UseCaseGrade> = emptyList(),
-    val recommendations: List<String> = emptyList()
+    val recommendations: List<String> = emptyList(),
+    val coreResult: ScoreResult? = null
 )
 
 /**
  * Smart5G Quality Score (0-100).
- * Combines throughput, latency, jitter, and cellular RSRP.
- * Also derives use-case suitability and actionable placement recommendations.
+ * Grounded in telecom standards via ScoreEngine (empirical weighting, logarithmic throughput scaling,
+ * stability variance analysis, and confidence rating).
  */
 object Quality {
-    private fun c(x: Double) = x.coerceIn(0.0, 100.0)
+    fun score(
+        samples: List<RadioSample>,
+        p: Perf?,
+        rsrpSpread: Int? = null
+    ): Score? {
+        if (samples.isEmpty() && p == null) return null
 
-    fun score(s: Signal?, p: Perf?, rsrp: Int? = s?.rsrp, rsrpSpread: Int? = null): Score? {
-        val m = linkedMapOf<String, Pair<Double, Double>>() // name -> (score, weight)
-        p?.down?.let { m["Download"] = c(it) to .30 }               // 100 Mbps = 100
-        p?.up?.let { m["Upload"] = c(it * 2) to .15 }               // 50 Mbps = 100
-        p?.latMs?.let { m["Latency"] = c(100 - it / 1.5) to .20 }   // 150 ms = 0
-        p?.jitterMs?.let { m["Jitter"] = c(100 - it * 4) to .10 }   // 25 ms = 0
-        rsrp?.let { m["Signal"] = c((it + 120) * 2.0) to .25 }      // -120 dBm = 0, -70 dBm = 100
-
-        if (m.isEmpty()) return null
-        val totalWeight = m.values.sumOf { it.second }
-        val totalScore = (m.values.sumOf { it.first * it.second } / totalWeight).toInt().coerceIn(0, 100)
-
-        val grade = when {
-            totalScore >= 85 -> "Excellent (5G Ultra)"
-            totalScore >= 70 -> "Good Performance"
-            totalScore >= 50 -> "Fair / Moderate"
-            else -> "Poor / Degraded"
+        val internet = p?.let {
+            InternetResult(
+                downMbps = it.down,
+                upMbps = it.up,
+                latencyMs = it.latMs,
+                packetLossPct = null
+            )
         }
+
+        val input = ScoreInput(samples = samples, internet = internet)
+        val core = ScoreEngine.compute(input) ?: return null
+
+        val totalScore = core.score
+        val grade = core.label
 
         val summary = when {
             totalScore >= 85 -> "Exceptional cellular performance with low latency and high bandwidth."
@@ -50,15 +64,18 @@ object Quality {
             else -> "Weak connection. Prone to packet drops and high latency."
         }
 
+        val parts = core.parts.mapKeys { it.key.title }.mapValues { it.value.score.toInt() }
+        val rawParts = core.parts.mapKeys { it.key.title }.mapValues { it.value.raw }
+
         // Use case suitability
         val useCases = mutableListOf<UseCaseGrade>()
         val down = p?.down ?: 0.0
         val up = p?.up ?: 0.0
         val lat = p?.latMs ?: 999.0
         val jit = p?.jitterMs ?: 999.0
-        val sig = rsrp ?: -130
+        val latestRsrp = samples.lastOrNull { it.rsrp != null }?.rsrp ?: -130
 
-        // 1. 4K / 8K Video Streaming
+        // 1. 4K / UHD Streaming
         val streamPass = down >= 25.0 && lat <= 120.0
         useCases += UseCaseGrade(
             name = "4K / UHD Streaming",
@@ -86,7 +103,7 @@ object Quality {
         )
 
         // 4. 5G Home Router / CPE Placement
-        val routerPass = totalScore >= 72 && sig >= -96
+        val routerPass = totalScore >= 72 && latestRsrp >= -96
         useCases += UseCaseGrade(
             name = "5G Router Placement",
             suitable = routerPass,
@@ -99,8 +116,8 @@ object Quality {
         if (rsrpSpread != null && rsrpSpread > 10) {
             recs += "Signal fluctuates by $rsrpSpread dB in this location. Obstacles or reflective glass cause multipath fading; try placing router away from interior walls."
         }
-        if (sig < -100) {
-            recs += "Cellular RSRP is weak ($sig dBm). Move closer to a window with an unobstructed line toward the nearest cellular tower."
+        if (latestRsrp < -100) {
+            recs += "Cellular RSRP is weak ($latestRsrp dBm). Move closer to a window with an unobstructed line toward the nearest cellular tower."
         }
         if (jit > 15.0) {
             recs += "High packet jitter detected (${"%.1f".format(jit)} ms). Cellular base station is likely under congestion."
@@ -116,9 +133,24 @@ object Quality {
             total = totalScore,
             grade = grade,
             summary = summary,
-            parts = m.mapValues { it.value.first.toInt() },
+            parts = parts,
+            rawParts = rawParts,
+            confidence = core.confidence,
+            fingerprint = core.fingerprint,
+            why = core.why,
+            reducing = core.reducing,
             useCases = useCases,
-            recommendations = recs
+            recommendations = recs,
+            coreResult = core
         )
+    }
+
+    fun score(s: Signal?, p: Perf?, rsrp: Int? = s?.rsrp, rsrpSpread: Int? = null): Score? {
+        val sample = RadioSample(
+            rsrp = rsrp ?: s?.rsrp,
+            rsrq = s?.rsrq,
+            sinr = s?.sinr
+        )
+        return score(listOf(sample), p, rsrpSpread)
     }
 }

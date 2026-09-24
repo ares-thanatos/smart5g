@@ -12,6 +12,8 @@ data class RoomResult(
     val name: String,
     val score: Int?,
     val grade: String? = null,
+    val confidence: String? = null,
+    val fingerprint: String? = null,
     val rsrp: Int?,
     val spread: Int?,
     val perf: Perf,
@@ -38,7 +40,6 @@ class RoomRepository(context: Context) {
 
     fun saveRoom(room: RoomResult): List<RoomResult> {
         val current = loadRooms().toMutableList()
-        // Replace if same name already tested or append
         val index = current.indexOfFirst { it.name.equals(room.name, ignoreCase = true) }
         if (index != -1) {
             current[index] = room
@@ -67,12 +68,14 @@ class RoomRepository(context: Context) {
         sb.appendLine("Total Rooms Surveyed: ${rooms.size}")
         if (best != null) {
             sb.appendLine("⭐ Recommended Spot for 5G Gateway / Router: ${best.name} (${best.score ?: 0}/100)")
+            best.fingerprint?.let { sb.appendLine("   Classification: $it (${best.confidence ?: "CONFIRMED"} Confidence)") }
         }
         sb.appendLine("----------------------------------------")
         rooms.sortedByDescending { it.score ?: -1 }.forEachIndexed { idx, r ->
             val star = if (r.id == best?.id && rooms.size > 1) " ⭐ BEST" else ""
             sb.appendLine("${idx + 1}. ${r.name}$star")
-            sb.appendLine("   Score: ${r.score ?: 0}/100 | ${r.grade ?: "N/A"}")
+            sb.appendLine("   Score: ${r.score ?: 0}/100 | ${r.grade ?: "N/A"}${r.fingerprint?.let { " • $it" } ?: ""}")
+            r.confidence?.let { sb.appendLine("   Confidence: $it") }
             sb.appendLine("   Network: ${r.networkType ?: "Cellular"} (${r.operator ?: "Unknown"})")
             sb.appendLine("   Signal (RSRP): ${r.rsrp?.let { "$it dBm" } ?: "N/A"} (Spread: ${r.spread?.let { "$it dB" } ?: "N/A"})")
             sb.appendLine("   Download: ${r.perf.down?.let { "%.1f Mbps".format(it) } ?: "N/A"} | Upload: ${r.perf.up?.let { "%.1f Mbps".format(it) } ?: "N/A"}")
@@ -108,4 +111,3 @@ data class SpeedTestConfig(
     val streams: Int = 4,
     val uploadEnabled: Boolean = true
 )
-
