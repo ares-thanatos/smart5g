@@ -1,4 +1,4 @@
-﻿package com.smart5g
+package com.smart5g
 
 import kotlinx.coroutines.*
 import java.net.HttpURLConnection
@@ -33,18 +33,23 @@ data class Perf(
     val timestamp: Long = System.currentTimeMillis()
 )
 
-/** Real measurements against Cloudflare edge network with live progress callbacks */
+/** Real measurements with configurable edge endpoints, durations, and parallel stream count */
 object SpeedTest {
-    private const val B = "https://speed.cloudflare.com"
-    private const val TIMEOUT_MS = 5000
+    private const val DEFAULT_SERVER = "https://speed.cloudflare.com"
+    private const val TIMEOUT_MS = 6000
 
-    suspend fun latency(n: Int = 8, onPingSample: ((Double) -> Unit)? = null): Pair<Double, Double>? = withContext(Dispatchers.IO) {
+    suspend fun latency(
+        baseUrl: String = DEFAULT_SERVER,
+        n: Int = 8,
+        onPingSample: ((Double) -> Unit)? = null
+    ): Pair<Double, Double>? = withContext(Dispatchers.IO) {
         val s = mutableListOf<Double>()
+        val pingUrl = if (baseUrl.contains("cloudflare")) "$baseUrl/__down?bytes=0" else baseUrl
         for (i in 0 until n) {
             if (!isActive) break
             runCatching {
                 val t = System.nanoTime()
-                val c = (URL("$B/__down?bytes=0").openConnection() as HttpURLConnection).apply {
+                val c = (URL(pingUrl).openConnection() as HttpURLConnection).apply {
                     connectTimeout = TIMEOUT_MS
                     readTimeout = TIMEOUT_MS
                 }
@@ -109,14 +114,16 @@ object SpeedTest {
     }
 
     suspend fun download(
+        baseUrl: String = DEFAULT_SERVER,
         sec: Int = 6,
         threads: Int = 4,
         onProgress: ((Double, Float) -> Unit)? = null
     ): Double? = timed(sec, threads, onProgress) { end, bytes ->
         val buf = ByteArray(65536)
+        val dlUrl = if (baseUrl.contains("cloudflare")) "$baseUrl/__down?bytes=25000000" else baseUrl
         while (System.nanoTime() < end && currentCoroutineContext().isActive) {
             try {
-                val c = (URL("$B/__down?bytes=25000000").openConnection() as HttpURLConnection).apply {
+                val c = (URL(dlUrl).openConnection() as HttpURLConnection).apply {
                     connectTimeout = TIMEOUT_MS
                     readTimeout = TIMEOUT_MS
                 }
@@ -135,14 +142,16 @@ object SpeedTest {
     }
 
     suspend fun upload(
+        baseUrl: String = DEFAULT_SERVER,
         sec: Int = 6,
         threads: Int = 3,
         onProgress: ((Double, Float) -> Unit)? = null
     ): Double? = timed(sec, threads, onProgress) { end, bytes ->
         val payload = ByteArray(500_000)
+        val upUrl = if (baseUrl.contains("cloudflare")) "$baseUrl/__up" else baseUrl
         while (System.nanoTime() < end && currentCoroutineContext().isActive) {
             try {
-                val c = (URL("$B/__up").openConnection() as HttpURLConnection).apply {
+                val c = (URL(upUrl).openConnection() as HttpURLConnection).apply {
                     connectTimeout = TIMEOUT_MS
                     readTimeout = TIMEOUT_MS
                     requestMethod = "POST"
@@ -160,13 +169,13 @@ object SpeedTest {
     }
 
     suspend fun runFullTest(
-        testSec: Int = 5,
+        config: SpeedTestConfig = SpeedTestConfig(),
         onUpdate: (SpeedTestProgress) -> Unit
     ): Perf = withContext(Dispatchers.IO) {
         var state = SpeedTestProgress(stage = TestStage.PING, overallProgress = 0.05f)
         onUpdate(state)
 
-        val pingResult = latency(6) {
+        val pingResult = latency(baseUrl = config.baseUrl, n = 6) {
             state = state.copy(pingMs = it)
             onUpdate(state)
         }
@@ -175,27 +184,38 @@ object SpeedTest {
         state = state.copy(stage = TestStage.DOWNLOAD, pingMs = ping, jitterMs = jitter, overallProgress = 0.2f)
         onUpdate(state)
 
-        val down = download(testSec) { mbps, stageProg ->
+        val down = download(
+            baseUrl = config.baseUrl,
+            sec = config.durationSeconds,
+            threads = config.streams
+        ) { mbps, stageProg ->
             state = state.copy(
                 stage = TestStage.DOWNLOAD,
                 currentMbps = mbps,
                 stageProgress = stageProg,
-                overallProgress = 0.2f + stageProg * 0.4f
+                overallProgress = 0.2f + stageProg * (if (config.uploadEnabled) 0.4f else 0.8f)
             )
             onUpdate(state)
         }
-        state = state.copy(stage = TestStage.UPLOAD, downloadMbps = down, currentMbps = 0.0, stageProgress = 0f, overallProgress = 0.6f)
-        onUpdate(state)
 
-        val up = upload(testSec) { mbps, stageProg ->
-            state = state.copy(
-                stage = TestStage.UPLOAD,
-                currentMbps = mbps,
-                stageProgress = stageProg,
-                overallProgress = 0.6f + stageProg * 0.4f
-            )
+        val up = if (config.uploadEnabled) {
+            state = state.copy(stage = TestStage.UPLOAD, downloadMbps = down, currentMbps = 0.0, stageProgress = 0f, overallProgress = 0.6f)
             onUpdate(state)
-        }
+
+            upload(
+                baseUrl = config.baseUrl,
+                sec = config.durationSeconds,
+                threads = (config.streams - 1).coerceAtLeast(2)
+            ) { mbps, stageProg ->
+                state = state.copy(
+                    stage = TestStage.UPLOAD,
+                    currentMbps = mbps,
+                    stageProgress = stageProg,
+                    overallProgress = 0.6f + stageProg * 0.4f
+                )
+                onUpdate(state)
+            }
+        } else null
 
         val result = Perf(down, up, ping, jitter)
         onUpdate(

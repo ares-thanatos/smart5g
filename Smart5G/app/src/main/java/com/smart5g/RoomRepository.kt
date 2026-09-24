@@ -1,4 +1,4 @@
-﻿package com.smart5g
+package com.smart5g
 
 import android.content.Context
 import android.content.Intent
@@ -88,4 +88,24 @@ class RoomRepository(context: Context) {
             putExtra(Intent.EXTRA_TEXT, sb.toString())
         }
     }
+
+    fun loadSpeedConfig(): SpeedTestConfig {
+        val json = prefs.getString("speed_test_config", null) ?: return SpeedTestConfig()
+        return runCatching {
+            gson.fromJson(json, SpeedTestConfig::class.java) ?: SpeedTestConfig()
+        }.getOrDefault(SpeedTestConfig())
+    }
+
+    fun saveSpeedConfig(config: SpeedTestConfig) {
+        prefs.edit().putString("speed_test_config", gson.toJson(config)).apply()
+    }
 }
+
+data class SpeedTestConfig(
+    val serverName: String = "Cloudflare Global Anycast",
+    val baseUrl: String = "https://speed.cloudflare.com",
+    val durationSeconds: Int = 5,
+    val streams: Int = 4,
+    val uploadEnabled: Boolean = true
+)
+

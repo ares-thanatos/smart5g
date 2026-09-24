@@ -68,7 +68,8 @@ Higher-frequency 5G signals (such as mid-band C-Band and mmWave) offer high band
 ### 2. Live Radial Speedometer & Multi-Stream Benchmark
 - **Speedometer Dial**: Custom 240-degree radial gauge with animated sweep arc, glowing needle pointer, and large digital Mbps readout.
 - **TLS-Compensated Latency & Jitter**: Isolates pure packet round-trip time from initial TLS handshake overhead.
-- **Parallel Multi-Stream Throughput**: Multi-threaded parallel streams against Cloudflare edge network with 5-second socket safety timeouts.
+- **Parallel Multi-Stream Throughput**: Multi-threaded parallel streams against global CDN edge servers with socket safety timeouts.
+- **Configurable Benchmark Tuning (v1.1.0)**: In-app settings dialog to choose servers (Cloudflare Anycast, Tele2 Speedtest, or Custom HTTPS endpoint), adjust phase durations (3s, 5s, 10s, 15s), parallel streams (2, 4, or 8 for high 5G throughput), and toggle upload tests.
 - **Real-Time Telemetry Feed**: Reports instantaneous Mbps updates and stage progression (Ping -> Download -> Upload).
 
 ### 3. Indoor Room Survey & Coverage Heatmapping
@@ -271,8 +272,8 @@ git push
 
 ## 🗺️ Future Roadmap
 
+- [x] **Custom Benchmark Server & Duration Config (v1.1.0)**: Choose test servers (Cloudflare, Tele2, Custom URL), test duration (3-15s), stream count (2-8), and upload toggle.
 - [ ] **Floorplan Blueprint Canvas**: Allow importing a 2D floorplan image and tapping rooms to generate an interpolated signal heatmap overlay.
-- [ ] **Custom Benchmark Server Selection**: Add server endpoints in Europe, North America, and Asia with custom payload sizing.
 - [ ] **PDF Survey Export**: Export full surveys with visual charts as a branded PDF document.
 - [ ] **24-Hour Signal Logger**: Background foreground service to measure carrier deprioritization and tower congestion throughout the day.
 - [ ] **Cell Tower Compass**: Estimate direction to the connected tower using crowdsourced cell tower databases (OpenCelliD).

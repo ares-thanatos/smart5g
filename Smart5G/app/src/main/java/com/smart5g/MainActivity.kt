@@ -64,7 +64,8 @@ class VM(app: Application) : AndroidViewModel(app) {
     val running = MutableStateFlow(false)
     val statusText = MutableStateFlow("")
     val rooms = MutableStateFlow<List<RoomResult>>(repo.loadRooms())
-    val isDarkMode = MutableStateFlow<Boolean?>(null) // null = system default
+    val isDarkMode = MutableStateFlow<Boolean?>(null)
+    val speedConfig = MutableStateFlow(repo.loadSpeedConfig())
 
     private var monitorJob: Job? = null
 
@@ -96,13 +97,18 @@ class VM(app: Application) : AndroidViewModel(app) {
         stopMonitor()
     }
 
+    fun updateSpeedConfig(newConfig: SpeedTestConfig) {
+        speedConfig.value = newConfig
+        repo.saveSpeedConfig(newConfig)
+    }
+
     fun runSpeedTest() {
         if (running.value) return
         running.value = true
-        statusText.value = "Running speed test..."
+        statusText.value = "Connecting to ${speedConfig.value.serverName}..."
         viewModelScope.launch {
             try {
-                val p = SpeedTest.runFullTest(testSec = 5) { prog ->
+                val p = SpeedTest.runFullTest(config = speedConfig.value) { prog ->
                     speedProgress.value = prog
                 }
                 perf.value = p
@@ -137,7 +143,10 @@ class VM(app: Application) : AndroidViewModel(app) {
                 }
 
                 statusText.value = "Running throughput & latency benchmark..."
-                val p = SpeedTest.runFullTest(testSec = 4) { prog ->
+                val roomConfig = speedConfig.value.copy(
+                    durationSeconds = speedConfig.value.durationSeconds.coerceAtMost(5)
+                )
+                val p = SpeedTest.runFullTest(config = roomConfig) { prog ->
                     speedProgress.value = prog
                 }
 
@@ -249,6 +258,13 @@ fun App(vm: VM, isDark: Boolean, onToggleDark: () -> Unit) {
                         Icon(Icons.Default.CellTower, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.width(8.dp))
                         Text("Smart5G", fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                        ) {
+                            Text("v1.1.0", fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        }
                     }
                 },
                 actions = {
@@ -407,6 +423,7 @@ fun DashboardScreen(vm: VM, isDark: Boolean) {
     val isRunning by vm.running.collectAsState()
     val statusText by vm.statusText.collectAsState()
     val history by vm.signalHistory.collectAsState()
+    val speedConfig by vm.speedConfig.collectAsState()
 
     SignalMeterCard(signal, isDark)
 
@@ -417,10 +434,12 @@ fun DashboardScreen(vm: VM, isDark: Boolean) {
     SpeedTestCard(
         perf = perf,
         progress = progress,
+        config = speedConfig,
         isRunning = isRunning,
         statusText = statusText,
         isDark = isDark,
-        onRunTest = { vm.runSpeedTest() }
+        onRunTest = { vm.runSpeedTest() },
+        onSaveConfig = { vm.updateSpeedConfig(it) }
     )
 
     score?.let { sc ->
@@ -519,7 +538,6 @@ fun SignalTimelineCard(history: List<Int>, isDark: Boolean) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Signal Stability Timeline", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                val curr = history.lastOrNull()
                 val minR = history.minOrNull() ?: 0
                 val maxR = history.maxOrNull() ?: 0
                 Text(
@@ -531,7 +549,6 @@ fun SignalTimelineCard(history: List<Int>, isDark: Boolean) {
 
             Spacer(Modifier.height(10.dp))
 
-            // Canvas Line Chart
             val lineColor = MaterialTheme.colorScheme.primary
             val gridColor = if (isDark) Color(0xFF2A374A) else Color(0xFFE2E8F0)
 
@@ -548,7 +565,6 @@ fun SignalTimelineCard(history: List<Int>, isDark: Boolean) {
                 val minVal = -125f
                 val maxVal = -65f
 
-                // Draw background grid lines
                 drawLine(gridColor, Offset(0f, 0f), Offset(w, 0f), strokeWidth = 1f)
                 drawLine(gridColor, Offset(0f, h / 2f), Offset(w, h / 2f), strokeWidth = 1f)
                 drawLine(gridColor, Offset(0f, h), Offset(w, h), strokeWidth = 1f)
@@ -589,7 +605,6 @@ fun SignalTimelineCard(history: List<Int>, isDark: Boolean) {
                     style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
                 )
 
-                // Current point marker
                 val lastVal = history.last()
                 val lastY = (1f - ((lastVal.toFloat() - minVal) / (maxVal - minVal)).coerceIn(0f, 1f)) * h
                 drawCircle(color = lineColor, radius = 4.dp.toPx(), center = Offset(w, lastY))
@@ -611,7 +626,6 @@ fun SpeedometerGauge(
         label = "SpeedGauge"
     )
 
-    // Map 0 to 500+ Mbps to 0.0..1.0 using logarithmic curve
     val progressFraction = when {
         animatedSpeed <= 0f -> 0f
         animatedSpeed < 10f -> (animatedSpeed / 10f) * 0.2f
@@ -641,7 +655,6 @@ fun SpeedometerGauge(
                 val startAngle = 150f
                 val sweepTotal = 240f
 
-                // Draw background arc
                 drawArc(
                     color = trackColor,
                     startAngle = startAngle,
@@ -651,7 +664,6 @@ fun SpeedometerGauge(
                     size = Size(w, h)
                 )
 
-                // Draw active progress arc with gradient
                 if (progressFraction > 0.01f) {
                     drawArc(
                         brush = Brush.sweepGradient(
@@ -670,7 +682,6 @@ fun SpeedometerGauge(
                     )
                 }
 
-                // Needle tip dot
                 val currentAngle = (startAngle + sweepTotal * progressFraction) * (PI.toFloat() / 180f)
                 val radius = w / 2f
                 val dotX = center.x + radius * cos(currentAngle)
@@ -679,7 +690,6 @@ fun SpeedometerGauge(
                 drawCircle(color = primaryColor, radius = 3.dp.toPx(), center = Offset(dotX, dotY))
             }
 
-            // Center Speed Value & Unit
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = "%.1f".format(animatedSpeed),
@@ -711,11 +721,26 @@ fun SpeedometerGauge(
 fun SpeedTestCard(
     perf: Perf?,
     progress: SpeedTestProgress,
+    config: SpeedTestConfig,
     isRunning: Boolean,
     statusText: String,
     isDark: Boolean,
-    onRunTest: () -> Unit
+    onRunTest: () -> Unit,
+    onSaveConfig: (SpeedTestConfig) -> Unit
 ) {
+    var showSettingsDialog by remember { mutableStateOf(false) }
+
+    if (showSettingsDialog) {
+        SpeedSettingsDialog(
+            currentConfig = config,
+            onDismiss = { showSettingsDialog = false },
+            onSave = {
+                onSaveConfig(it)
+                showSettingsDialog = false
+            }
+        )
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -727,26 +752,43 @@ fun SpeedTestCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Performance Benchmark", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                if (isRunning) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer
+                Column {
+                    Text("Performance Benchmark", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        "${config.serverName} • ${config.durationSeconds}s • ${config.streams} streams",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isRunning) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            Text(
+                                progress.stage.displayName,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = { showSettingsDialog = true },
+                        enabled = !isRunning,
+                        modifier = Modifier.size(32.dp)
                     ) {
-                        Text(
-                            progress.stage.displayName,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        Icon(Icons.Default.Tune, contentDescription = "Benchmark Settings", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                     }
                 }
             }
 
             Spacer(Modifier.height(8.dp))
 
-            // Animated Radial Speedometer
             AnimatedVisibility(visible = isRunning) {
                 SpeedometerGauge(
                     speedMbps = progress.currentMbps,
@@ -755,7 +797,6 @@ fun SpeedTestCard(
                 )
             }
 
-            // Metric boxes
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     MetricBox(
@@ -805,6 +846,126 @@ fun SpeedTestCard(
             }
         }
     }
+}
+
+@Composable
+fun SpeedSettingsDialog(
+    currentConfig: SpeedTestConfig,
+    onDismiss: () -> Unit,
+    onSave: (SpeedTestConfig) -> Unit
+) {
+    var selectedServer by remember { mutableStateOf(currentConfig.serverName) }
+    var customUrl by remember { mutableStateOf(if (currentConfig.serverName == "Custom Endpoint") currentConfig.baseUrl else "") }
+    var selectedDuration by remember { mutableIntStateOf(currentConfig.durationSeconds) }
+    var selectedStreams by remember { mutableIntStateOf(currentConfig.streams) }
+    var uploadEnabled by remember { mutableStateOf(currentConfig.uploadEnabled) }
+
+    val servers = listOf(
+        Pair("Cloudflare Global Anycast", "https://speed.cloudflare.com"),
+        Pair("Tele2 European Edge", "https://speedtest.tele2.net"),
+        Pair("Custom Endpoint", customUrl)
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Benchmark Settings", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text("Test Server Endpoint", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                servers.forEach { (name, url) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = selectedServer == name,
+                            onClick = { selectedServer = name }
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(name, fontSize = 13.sp)
+                    }
+                }
+
+                if (selectedServer == "Custom Endpoint") {
+                    OutlinedTextField(
+                        value = customUrl,
+                        onValueChange = { customUrl = it },
+                        label = { Text("Server URL (HTTPS)") },
+                        placeholder = { Text("https://my-server.com") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                HorizontalDivider()
+
+                Text("Test Duration per Phase", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(Pair(3, "3s"), Pair(5, "5s"), Pair(10, "10s"), Pair(15, "15s")).forEach { (sec, label) ->
+                        FilterChip(
+                            selected = selectedDuration == sec,
+                            onClick = { selectedDuration = sec },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+
+                Text("Parallel Stream Count", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(Pair(2, "2 Streams"), Pair(4, "4 (Def)"), Pair(8, "8 (High 5G)")).forEach { (count, label) ->
+                        FilterChip(
+                            selected = selectedStreams == count,
+                            onClick = { selectedStreams = count },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Include Upload Test", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Switch(checked = uploadEnabled, onCheckedChange = { uploadEnabled = it })
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val finalBaseUrl = when (selectedServer) {
+                    "Cloudflare Global Anycast" -> "https://speed.cloudflare.com"
+                    "Tele2 European Edge" -> "https://speedtest.tele2.net"
+                    else -> customUrl.trim().ifBlank { "https://speed.cloudflare.com" }
+                }
+                onSave(
+                    SpeedTestConfig(
+                        serverName = selectedServer,
+                        baseUrl = finalBaseUrl,
+                        durationSeconds = selectedDuration,
+                        streams = selectedStreams,
+                        uploadEnabled = uploadEnabled
+                    )
+                )
+            }) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable
